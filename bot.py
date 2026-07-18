@@ -34,12 +34,25 @@ MENU_RESERVATION: Final[str] = "🎓 رزرو مشاوره تحصیلی"
 MENU_ANONYMOUS: Final[str] = "💌 ارسال پیام ناشناس"
 MENU_SUPPORT: Final[str] = "💬 ارتباط با پشتیبانی"
 
-BOT_VERSION: Final[str] = "4.1-keyboard-menu-study-fields"
+BOT_VERSION: Final[str] = "4.3-selection-only-school-fields"
 
 SHARE_PHONE: Final[str] = "📱 ارسال شماره تماس من"
 CANCEL: Final[str] = "❌ انصراف"
 CONFIRM_RESERVATION: Final[str] = "✅ ثبت نهایی"
 RESTART_RESERVATION: Final[str] = "✏️ شروع دوباره"
+
+LEVEL_MIDDLE_SCHOOL: Final[str] = "دوره اول"
+LEVEL_TENTH: Final[str] = "پایه دهم"
+LEVEL_ELEVENTH: Final[str] = "پایه یازدهم"
+LEVEL_TWELFTH: Final[str] = "پایه دوازدهم"
+LEVEL_GRADUATE: Final[str] = "فارغ‌التحصیل"
+
+FIELD_EXPERIMENTAL: Final[str] = "علوم تجربی"
+FIELD_MATH: Final[str] = "ریاضی و فیزیک"
+FIELD_HUMANITIES: Final[str] = "علوم انسانی"
+FIELD_ART: Final[str] = "هنر"
+FIELD_LANGUAGE: Final[str] = "زبان"
+FIELD_NOT_APPLICABLE: Final[str] = "ندارد (دوره اول)"
 CONFIRM_ANONYMOUS: Final[str] = "✅ ارسال ناشناس"
 EDIT_ANONYMOUS: Final[str] = "✏️ ویرایش پیام"
 
@@ -166,6 +179,62 @@ def phone_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         one_time_keyboard=False,
         is_persistent=True,
+    )
+
+
+def education_level_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(LEVEL_MIDDLE_SCHOOL),
+            ],
+            [
+                KeyboardButton(LEVEL_TENTH),
+                KeyboardButton(LEVEL_ELEVENTH),
+            ],
+            [
+                KeyboardButton(LEVEL_TWELFTH),
+                KeyboardButton(LEVEL_GRADUATE),
+            ],
+            [
+                KeyboardButton(
+                    CANCEL,
+                    style="danger",
+                )
+            ],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        is_persistent=True,
+        input_field_placeholder="مقطع تحصیلی را انتخاب کنید",
+    )
+
+
+def field_of_study_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(FIELD_EXPERIMENTAL),
+                KeyboardButton(FIELD_MATH),
+            ],
+            [
+                KeyboardButton(FIELD_HUMANITIES),
+                KeyboardButton(FIELD_ART),
+            ],
+            [
+                KeyboardButton(FIELD_LANGUAGE),
+            ],
+            [
+                KeyboardButton(
+                    CANCEL,
+                    style="danger",
+                )
+            ],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        is_persistent=True,
+        input_field_placeholder="رشته تحصیلی را انتخاب کنید",
     )
 
 
@@ -485,6 +554,37 @@ async def receive_phone_text(
     return CITY
 
 
+async def show_reservation_summary(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    if not update.message:
+        return RESERVATION_CONFIRM
+
+    full_name = html.escape(context.user_data["full_name"])
+    phone = html.escape(context.user_data["phone"])
+    city = html.escape(context.user_data["city"])
+    education_level = html.escape(
+        context.user_data["education_level"]
+    )
+    field_of_study = html.escape(
+        context.user_data["field_of_study"]
+    )
+
+    await update.message.reply_text(
+        "لطفاً اطلاعاتت رو بررسی کن:\n\n"
+        f"👤 <b>نام و نام خانوادگی:</b> {full_name}\n"
+        f"📱 <b>شماره تماس:</b> <code>{phone}</code>\n"
+        f"🏙 <b>شهر:</b> {city}\n"
+        f"🎓 <b>مقطع تحصیلی:</b> {education_level}\n"
+        f"📚 <b>رشته تحصیلی:</b> {field_of_study}\n\n"
+        "اطلاعات درسته؟",
+        parse_mode=ParseMode.HTML,
+        reply_markup=reservation_confirmation_keyboard(),
+    )
+    return RESERVATION_CONFIRM
+
+
 async def receive_city(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -507,10 +607,9 @@ async def receive_city(
     context.user_data["city"] = city
 
     await update.message.reply_text(
-        "مقطع تحصیلی فعلیت رو بنویس 🎓\n\n"
-        "مثلاً: پایه دوازدهم، فارغ‌التحصیل، کارشناسی "
-        "یا کارشناسی ارشد",
-        reply_markup=cancel_keyboard(),
+        "مقطع تحصیلی فعلیت رو فقط از دکمه‌های زیر انتخاب کن 🎓\n"
+        "در این مرحله نیازی به تایپ کردن نیست.",
+        reply_markup=education_level_keyboard(),
     )
     return EDUCATION_LEVEL
 
@@ -522,24 +621,37 @@ async def receive_education_level(
     if not update.message or not update.message.text:
         return EDUCATION_LEVEL
 
-    education_level = " ".join(update.message.text.split())
+    education_level = update.message.text.strip()
 
     if education_level == CANCEL:
         return await cancel_reservation(update, context)
 
-    if len(education_level) < 2 or len(education_level) > 80:
+    valid_levels = {
+        LEVEL_MIDDLE_SCHOOL,
+        LEVEL_TENTH,
+        LEVEL_ELEVENTH,
+        LEVEL_TWELFTH,
+        LEVEL_GRADUATE,
+    }
+
+    if education_level not in valid_levels:
         await update.message.reply_text(
-            "لطفاً مقطع تحصیلی رو واضح‌تر بنویس.",
-            reply_markup=cancel_keyboard(),
+            "این گزینه قابل تایپ نیست؛ لطفاً مقطع رو فقط از دکمه‌های پایین انتخاب کن.",
+            reply_markup=education_level_keyboard(),
         )
         return EDUCATION_LEVEL
 
     context.user_data["education_level"] = education_level
 
+    # Students in middle school do not have an academic field yet.
+    if education_level == LEVEL_MIDDLE_SCHOOL:
+        context.user_data["field_of_study"] = FIELD_NOT_APPLICABLE
+        return await show_reservation_summary(update, context)
+
     await update.message.reply_text(
-        "رشته تحصیلیت رو بنویس 📚\n\n"
-        "مثلاً: انسانی، تجربی، ریاضی، اقتصاد یا مدیریت",
-        reply_markup=cancel_keyboard(),
+        "رشته تحصیلیت رو فقط از دکمه‌های زیر انتخاب کن 📚\n"
+        "در این مرحله نیازی به تایپ کردن نیست.",
+        reply_markup=field_of_study_keyboard(),
     )
     return FIELD_OF_STUDY
 
@@ -551,42 +663,28 @@ async def receive_field_of_study(
     if not update.message or not update.message.text:
         return FIELD_OF_STUDY
 
-    field_of_study = " ".join(update.message.text.split())
+    field_of_study = update.message.text.strip()
 
     if field_of_study == CANCEL:
         return await cancel_reservation(update, context)
 
-    if len(field_of_study) < 2 or len(field_of_study) > 100:
+    valid_fields = {
+        FIELD_EXPERIMENTAL,
+        FIELD_MATH,
+        FIELD_HUMANITIES,
+        FIELD_ART,
+        FIELD_LANGUAGE,
+    }
+
+    if field_of_study not in valid_fields:
         await update.message.reply_text(
-            "لطفاً رشته تحصیلی رو واضح‌تر بنویس.",
-            reply_markup=cancel_keyboard(),
+            "این گزینه قابل تایپ نیست؛ لطفاً رشته رو فقط از دکمه‌های پایین انتخاب کن.",
+            reply_markup=field_of_study_keyboard(),
         )
         return FIELD_OF_STUDY
 
     context.user_data["field_of_study"] = field_of_study
-
-    full_name = html.escape(context.user_data["full_name"])
-    phone = html.escape(context.user_data["phone"])
-    city = html.escape(context.user_data["city"])
-    education_level = html.escape(
-        context.user_data["education_level"]
-    )
-    field_of_study_safe = html.escape(
-        context.user_data["field_of_study"]
-    )
-
-    await update.message.reply_text(
-        "لطفاً اطلاعاتت رو بررسی کن:\n\n"
-        f"👤 <b>نام و نام خانوادگی:</b> {full_name}\n"
-        f"📱 <b>شماره تماس:</b> <code>{phone}</code>\n"
-        f"🏙 <b>شهر:</b> {city}\n"
-        f"🎓 <b>مقطع تحصیلی:</b> {education_level}\n"
-        f"📚 <b>رشته تحصیلی:</b> {field_of_study_safe}\n\n"
-        "اطلاعات درسته؟",
-        parse_mode=ParseMode.HTML,
-        reply_markup=reservation_confirmation_keyboard(),
-    )
-    return RESERVATION_CONFIRM
+    return await show_reservation_summary(update, context)
 
 
 async def confirm_reservation(
