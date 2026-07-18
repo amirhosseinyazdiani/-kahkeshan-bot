@@ -4,12 +4,14 @@ import logging
 import os
 import re
 import secrets
+from pathlib import Path
 from typing import Final
 
 from telegram import (
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     KeyboardButton,
     MenuButtonCommands,
     ReplyKeyboardMarkup,
@@ -33,8 +35,10 @@ from telegram.ext import (
 MENU_RESERVATION: Final[str] = "🎓 رزرو مشاوره تحصیلی"
 MENU_ANONYMOUS: Final[str] = "💌 ارسال پیام ناشناس"
 MENU_SUPPORT: Final[str] = "💬 ارتباط با پشتیبانی"
+MENU_GALAXY_STARS: Final[str] = "⭐️ ستاره‌های کهکشان"
+BACK_TO_MAIN_MENU: Final[str] = "🔙 بازگشت به منوی اصلی"
 
-BOT_VERSION: Final[str] = "4.3-selection-only-school-fields"
+BOT_VERSION: Final[str] = "4.5-galaxy-stars-navigation"
 
 SHARE_PHONE: Final[str] = "📱 ارسال شماره تماس من"
 CANCEL: Final[str] = "❌ انصراف"
@@ -72,6 +76,7 @@ EDIT_ANONYMOUS: Final[str] = "✏️ ویرایش پیام"
 ANONYMOUS_TEXT, ANONYMOUS_CONFIRM = range(10, 12)
 SUPPORT_TEXT = 20
 ADMIN_REPLY_TEXT = 30
+GALAXY_YEAR_SELECTION = 40
 
 # ---------------------------
 # Environment
@@ -89,6 +94,21 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+BASE_DIR: Final[Path] = Path(__file__).resolve().parent
+GALAXY_STARS_DIR: Final[Path] = BASE_DIR / "assets" / "galaxy_stars"
+GALAXY_YEAR_TO_FILE: Final[dict[str, str]] = {
+    "۱۳۹۶": "1396.png",
+    "۱۳۹۷": "1397.png",
+    "۱۳۹۸": "1398.png",
+    "۱۳۹۹": "1399.png",
+    "۱۴۰۰": "1400.png",
+    "۱۴۰۱": "1401.png",
+    "۱۴۰۲": "1402.png",
+    "۱۴۰۳": "1403.png",
+}
+GALAXY_YEARS: Final[tuple[str, ...]] = tuple(GALAXY_YEAR_TO_FILE.keys())
+
 
 
 def parse_admin_ids(raw_value: str) -> list[int]:
@@ -122,6 +142,12 @@ def main_menu() -> ReplyKeyboardMarkup:
     """Persistent bottom keyboard, similar to the user's reference image."""
     return ReplyKeyboardMarkup(
         keyboard=[
+            [
+                KeyboardButton(
+                    MENU_GALAXY_STARS,
+                    style="primary",
+                )
+            ],
             [
                 KeyboardButton(
                     MENU_RESERVATION,
@@ -284,6 +310,87 @@ def anonymous_confirmation_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def galaxy_years_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton("۱۳۹۶"),
+                KeyboardButton("۱۳۹۷"),
+            ],
+            [
+                KeyboardButton("۱۳۹۸"),
+                KeyboardButton("۱۳۹۹"),
+            ],
+            [
+                KeyboardButton("۱۴۰۰"),
+                KeyboardButton("۱۴۰۱"),
+            ],
+            [
+                KeyboardButton("۱۴۰۲"),
+                KeyboardButton("۱۴۰۳"),
+            ],
+            [
+                KeyboardButton(BACK_TO_MAIN_MENU),
+            ],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        is_persistent=True,
+        input_field_placeholder="سال موردنظر را انتخاب کنید",
+    )
+
+
+def galaxy_navigation_keyboard(year: str) -> InlineKeyboardMarkup:
+    buttons: list[InlineKeyboardButton] = []
+
+    try:
+        current_index = GALAXY_YEARS.index(year)
+    except ValueError:
+        current_index = 0
+
+    if current_index > 0:
+        previous_year = GALAXY_YEARS[current_index - 1]
+        buttons.append(
+            InlineKeyboardButton(
+                f"⬅️ سال قبل: {previous_year}",
+                callback_data=f"galaxy_year:{previous_year}",
+            )
+        )
+
+    if current_index < len(GALAXY_YEARS) - 1:
+        next_year = GALAXY_YEARS[current_index + 1]
+        buttons.append(
+            InlineKeyboardButton(
+                f"سال بعد: {next_year} ➡️",
+                callback_data=f"galaxy_year:{next_year}",
+            )
+        )
+
+    keyboard: list[list[InlineKeyboardButton]] = []
+
+    if buttons:
+        keyboard.append(buttons)
+
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "📅 انتخاب سال از فهرست",
+                callback_data="galaxy_year_list",
+            )
+        ]
+    )
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "🏠 بازگشت به منوی اصلی",
+                callback_data="galaxy_main_menu",
+            )
+        ]
+    )
+
+    return InlineKeyboardMarkup(keyboard)
+
+
 def support_reply_keyboard(user_id: int) -> InlineKeyboardMarkup:
     """Inline button is kept only for the admin's contextual reply action."""
     return InlineKeyboardMarkup(
@@ -359,6 +466,7 @@ async def post_init(application: Application) -> None:
                 BotCommand("menu", "نمایش منوی خدمات"),
                 BotCommand("id", "نمایش شناسه عددی چت"),
                 BotCommand("version", "نمایش نسخه فعال ربات"),
+                BotCommand("stars", "نمایش ستاره‌های کهکشان"),
             ]
         )
         await application.bot.set_chat_menu_button(
@@ -366,6 +474,121 @@ async def post_init(application: Application) -> None:
         )
     except Exception:
         logger.exception("Could not configure bot commands/menu button.")
+
+
+def get_galaxy_year_image_path(year: str) -> Path | None:
+    filename = GALAXY_YEAR_TO_FILE.get(year)
+    if not filename:
+        return None
+
+    image_path = GALAXY_STARS_DIR / filename
+    if image_path.exists():
+        return image_path
+
+    return None
+
+
+async def send_galaxy_year_image(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    year: str,
+) -> None:
+    image_path = get_galaxy_year_image_path(year)
+
+    if image_path is None:
+        error_text = (
+            "عکس این سال داخل فایل‌های ربات پیدا نشد. "
+            "لطفاً نسخه کامل ZIP را در گیت‌هاب بارگذاری کن."
+        )
+
+        if update.callback_query and update.callback_query.message:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(
+                error_text,
+                reply_markup=galaxy_years_keyboard(),
+            )
+        elif update.message:
+            await update.message.reply_text(
+                error_text,
+                reply_markup=galaxy_years_keyboard(),
+            )
+        return
+
+    caption = (
+        f"⭐️ ستاره‌های کهکشان {year}\n"
+        "با دکمه‌های زیر می‌تونی سال قبل یا بعد رو ببینی."
+    )
+
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+
+        with image_path.open("rb") as image_file:
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=image_file,
+                    caption=caption,
+                ),
+                reply_markup=galaxy_navigation_keyboard(year),
+            )
+        return
+
+    if update.message:
+        with image_path.open("rb") as image_file:
+            await update.message.reply_photo(
+                photo=image_file,
+                caption=caption,
+                reply_markup=galaxy_navigation_keyboard(year),
+            )
+
+
+async def handle_galaxy_navigation(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    query = update.callback_query
+    if not query:
+        return GALAXY_YEAR_SELECTION
+
+    data = query.data or ""
+
+    if data == "galaxy_year_list":
+        await query.answer()
+        if query.message:
+            await query.message.reply_text(
+                "سال موردنظر رو از دکمه‌های پایین انتخاب کن:",
+                reply_markup=galaxy_years_keyboard(),
+            )
+        return GALAXY_YEAR_SELECTION
+
+    if data == "galaxy_main_menu":
+        await query.answer()
+        if query.message:
+            await query.message.reply_text(
+                "به منوی اصلی برگشتیم ✅",
+                reply_markup=main_menu(),
+            )
+        return ConversationHandler.END
+
+    if data.startswith("galaxy_year:"):
+        selected_year = data.split(":", 1)[1]
+
+        if selected_year not in GALAXY_YEAR_TO_FILE:
+            await query.answer(
+                "سال انتخاب‌شده معتبر نیست.",
+                show_alert=True,
+            )
+            return GALAXY_YEAR_SELECTION
+
+        await send_galaxy_year_image(
+            update,
+            context,
+            selected_year,
+        )
+        return GALAXY_YEAR_SELECTION
+
+    await query.answer()
+    return GALAXY_YEAR_SELECTION
 
 
 # ---------------------------
@@ -382,7 +605,8 @@ async def start(
         await update.message.reply_text(
             "سلام و خوش اومدی 🌱\n\n"
             "از منوی پایین صفحه، گزینه موردنظرت رو انتخاب کن:\n"
-            "نسخه جدید منوی خدمات فعال است ✅",
+            "نسخه جدید منوی خدمات فعال است ✅\n"
+            "⭐️ بخش ستاره‌های کهکشان هم اضافه شده است.",
             reply_markup=main_menu(),
         )
 
@@ -414,10 +638,52 @@ async def show_version(
             f"<code>{BOT_VERSION}</code>\n\n"
             "✅ منوی کیبوردی پایین صفحه\n"
             "✅ دریافت مقطع تحصیلی\n"
-            "✅ دریافت رشته تحصیلی",
+            "✅ دریافت رشته تحصیلی\n"
+            "✅ بخش ستاره‌های کهکشان با سال‌های ۱۳۹۶ تا ۱۴۰۳\n"
+            "✅ دکمه‌های سال قبل و سال بعد زیر هر عکس",
             parse_mode=ParseMode.HTML,
             reply_markup=main_menu(),
         )
+
+
+async def begin_galaxy_stars(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    if update.message:
+        await update.message.reply_text(
+            "بخش ⭐️ ستاره‌های کهکشان\n\n"
+            "سال موردنظر را از بین ۱۳۹۶ تا ۱۴۰۳ انتخاب کن.",
+            reply_markup=galaxy_years_keyboard(),
+        )
+    return GALAXY_YEAR_SELECTION
+
+
+async def handle_galaxy_year_selection(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    if not update.message or not update.message.text:
+        return GALAXY_YEAR_SELECTION
+
+    selected_value = update.message.text.strip()
+
+    if selected_value == BACK_TO_MAIN_MENU:
+        await update.message.reply_text(
+            "به منوی اصلی برگشتیم ✅",
+            reply_markup=main_menu(),
+        )
+        return ConversationHandler.END
+
+    if selected_value not in GALAXY_YEAR_TO_FILE:
+        await update.message.reply_text(
+            "لطفاً فقط یکی از سال‌های موجود را از دکمه‌های پایین انتخاب کن.",
+            reply_markup=galaxy_years_keyboard(),
+        )
+        return GALAXY_YEAR_SELECTION
+
+    await send_galaxy_year_image(update, context, selected_value)
+    return GALAXY_YEAR_SELECTION
 
 
 async def unknown_text(
@@ -426,7 +692,7 @@ async def unknown_text(
 ) -> None:
     if update.message:
         await update.message.reply_text(
-            "لطفاً یکی از گزینه‌های منوی پایین صفحه رو انتخاب کن.",
+            "لطفاً یکی از گزینه‌های منوی پایین صفحه رو انتخاب کن. اگر می‌خواهی قبولی‌های هر سال را ببینی، روی ⭐️ ستاره‌های کهکشان بزن.",
             reply_markup=main_menu(),
         )
 
@@ -1216,6 +1482,33 @@ def build_application() -> Application:
         .build()
     )
 
+    galaxy_stars_conversation = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                exact_text_filter(MENU_GALAXY_STARS),
+                begin_galaxy_stars,
+            ),
+            CommandHandler("stars", begin_galaxy_stars),
+        ],
+        states={
+            GALAXY_YEAR_SELECTION: [
+                CallbackQueryHandler(
+                    handle_galaxy_navigation,
+                    pattern=r"^galaxy_(?:year:\d{4}|year_list|main_menu)$",
+                ),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    handle_galaxy_year_selection,
+                ),
+            ]
+        },
+        fallbacks=[
+            CommandHandler("start", start),
+            CommandHandler("menu", start),
+        ],
+        allow_reentry=True,
+    )
+
     reservation_conversation = ConversationHandler(
         entry_points=[
             MessageHandler(
@@ -1374,6 +1667,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("id", show_chat_id))
     application.add_handler(CommandHandler("version", show_version))
 
+    application.add_handler(galaxy_stars_conversation)
     application.add_handler(reservation_conversation)
     application.add_handler(anonymous_conversation)
     application.add_handler(support_conversation)
